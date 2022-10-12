@@ -1,0 +1,7 @@
+[hello]
+title = MyCLI v0.1.0
+
+[main]
+default_package =
+
+[packages]
