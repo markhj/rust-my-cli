@@ -1,12 +1,16 @@
 use std::{fs, io};
+use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use rust_config_reader::{ConfigReader, Config, ConfigurationItem};
 
 mod session;
-use session::Session;
+mod package;
+mod interpreter;
 
-// Convert using: String to being a Package struct
+use session::Session;
+use crate::interpreter::Interpreter;
+use crate::package::Package;
 
 fn main() {
     let config: Config = init();
@@ -34,12 +38,12 @@ fn welcome(config: &Config) {
 }
 
 fn init() -> Config {
-    let directives_path : &Path = Path::new("./directives");
-    if !directives_path.exists() {
-        fs::create_dir(directives_path).expect("Failed to create folder: directives");
+    let path_packages: &Path = Path::new("./packages");
+    if !path_packages.exists() {
+        fs::create_dir(path_packages).expect("Failed to create folder: packages");
     }
 
-    let config_path : &Path = Path::new("./config");
+    let config_path: &Path = Path::new("./config");
     if !config_path.exists() {
         fs::copy(Path::new("./config-sample"), config_path).unwrap();
     }
@@ -56,13 +60,76 @@ fn handle(config: &Config, session: &mut Session) {
     io::stdin().read_line(&mut input).unwrap();
 
     let trimmed: &str = input.trim();
-    let first: &str = trimmed.clone().split(" ").collect::<Vec<&str>>()[0];
+    let first: &str = trimmed.split(" ").collect::<Vec<&str>>()[0];
     match first {
         "exit" => std::process::exit(0),
         "packages" => list_packages(&config),
         "use" => set_using(&trimmed, &config, session),
+        "help" => help(&config),
+        "make:package" => make_package(&trimmed),
+        "make:command" => make_command(&trimmed, &config, &session),
         _ => parse(&trimmed, &config, &session),
     };
+}
+
+fn make_command(input: &str, _config: &Config, session: &Session) {
+    if session.using.is_none() {
+        println!("Please select a package");
+        return;
+    }
+
+    let command_name: &str = input.split(" ").collect::<Vec<&str>>()[1];
+    let package: &Package = session.using.as_ref().unwrap();
+    let path: String = package.get_path(format!("{}.scp", command_name));
+    let command_path: &Path = Path::new(path.as_str());
+
+    if command_path.exists() {
+        println!("Command already exists");
+        return;
+    }
+
+    fs::copy(
+        Path::new("./res/stubs/new-command/command.scp"),
+        command_path,
+    ).expect("Failed to create new command");
+}
+
+fn make_package(input: &str) {
+    let package_name: &str = input.split(" ").collect::<Vec<&str>>()[1];
+    let dir: String = format!("./packages/{}", package_name);
+    let new_package_path: &Path = Path::new(dir.as_str());
+    if new_package_path.exists() {
+        println!("Package already exists");
+        return;
+    }
+
+    fs::create_dir(dir).expect("Failed to create package folder");
+
+    let mut files: HashMap<&str, Vec<&str>> = HashMap::new();
+    files.insert(".env.example", vec!(".env.example", ".env"));
+    files.insert("_gitignore", vec!(".gitignore"));
+    files.insert("hello.scp", vec!("hello.scp"));
+
+    for (k, v) in files {
+        for x in v {
+            fs::copy(
+                Path::new(format!("./res/stubs/new-package/{}", k).as_str()),
+                Path::new(format!("./packages/{}/{}", package_name, x).as_str()),
+            ).expect("Failed to create package");
+        }
+    }
+
+    println!(
+        "Package created!\nOpen the config file and add the \
+        following under the [packages] list: {} = \"./packages/{}\"\
+        \nYou will need to restart the application after.",
+        package_name,
+        package_name,
+    );
+}
+
+fn help(_config: &Config) {
+    println!("Help coming here...");
 }
 
 fn package_exists(config: &Config, name: &str) -> bool {
@@ -73,13 +140,25 @@ fn set_using(input: &str, config: &Config, session: &mut Session) {
     use_package(&config, session, input.split(" ").collect::<Vec<&str>>()[1]);
 }
 
-fn use_package(config: &Config, session: &mut Session, space: &str) {
-    if !package_exists(config, space) {
-        println!("Package does not exist. You can add it in the configuration file.");
+fn use_package(config: &Config, session: &mut Session, package_name: &str) {
+    if !package_exists(config, package_name) {
+        println!("Package doesn't exist. You can add it in the configuration file.");
         return;
     }
-    session.using = Some(space.to_string());
-    println!("Using package: {}", space);
+    let path_to_package: PathBuf = Path::new(
+        config.group("packages").unwrap().get(package_name).unwrap().as_str()
+    ).to_owned();
+
+    if !path_to_package.exists() {
+        println!("Package not found at {:?}", path_to_package);
+        return;
+    }
+
+    session.using = Some(Package {
+        name: package_name.to_string(),
+        path: path_to_package,
+    });
+    println!("Using package: {}", package_name);
 }
 
 fn list_packages(config: &Config) {
@@ -88,10 +167,21 @@ fn list_packages(config: &Config) {
     })
 }
 
-fn parse(input: &str, config: &Config, session: &Session) {
+fn parse(input: &str, _config: &Config, session: &Session) {
     if session.using.is_none() {
-        println!("Select a space with command \"use <space>\"");
+        println!("Select a package with command \"use <package>\"");
         return;
     }
-    println!("Parsing: {} USING: {}", input, session.using.as_ref().unwrap());
+
+    let command_name: &str = input.split(" ").collect::<Vec<&str>>()[0];
+    let package: &Package = session.using.as_ref().unwrap();
+    let path: String = package.get_path(format!("{}.scp", command_name));
+    let command_path: &Path = Path::new(path.as_str());
+
+    if !command_path.exists() {
+        println!("Command {} not found in package {}", command_name, package.name);
+        return;
+    }
+
+    Interpreter::run(command_path);
 }

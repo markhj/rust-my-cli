@@ -1,14 +1,5 @@
+use crate::Package;
 
 pub struct Session {
-    pub using: Option<String>,
+    pub using: Option<Package>,
 }
-
-impl Session {
-    pub fn new() -> Session {
-        Session {
-            using: None,
-        }
-    }
-}
-
-
